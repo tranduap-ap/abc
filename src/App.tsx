@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { storageService } from './services/storage';
+import { storageService, initCloudSync } from './services/storage';
 import {
   Student,
   Rule,
@@ -272,6 +272,22 @@ export default function App() {
     setCompetitions(storageService.getCompetitionRecords());
   };
 
+  const handleReloadAllData = () => {
+  setSettings(storageService.getSettings());
+  setStudents(storageService.getStudents());
+  setRules(storageService.getRules());
+  setIncidents(storageService.getIncidents());
+  setMessageLogs(storageService.getMessageLogs());
+  setCompetitions(storageService.getCompetitionRecords());
+  setFundTransactions(storageService.getFundTransactions());
+};
+
+// THÊM ĐOẠN NÀY ĐỂ TỰ ĐỘNG ĐỒNG BỘ KHI MỞ WEB:
+useEffect(() => {
+  initCloudSync(() => {
+    handleReloadAllData();
+  });
+}, []);
   const handleUpdateCompetitionRecord = (record: SchoolCompetitionRecord) => {
     storageService.updateCompetitionRecord(record);
     setCompetitions(storageService.getCompetitionRecords());
