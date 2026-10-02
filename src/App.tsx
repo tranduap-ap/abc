@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { storageService, initCloudSync } from './services/storage';
+import { storageService } from './services/storage';
 import {
   Student,
   Rule,
@@ -34,6 +34,127 @@ import { StudentEditModal } from './components/StudentEditModal';
 import { SendNotificationModal } from './components/SendNotificationModal';
 import { ExcelExportModal } from './components/ExcelExportModal';
 import { excelService } from './services/excelService';
+
+// ============================================================================
+// CẤU HÌNH ĐỒNG BỘ ĐÁM MÂY FIREBASE (PROJECT: tinhoc-724e2)
+// ============================================================================
+const CANDIDATE_URLS = [
+  'https://tinhoc-724e2-default-rtdb.asia-southeast1.firebasedatabase.app',
+  'https://tinhoc-724e2-default-rtdb.firebaseio.com',
+];
+
+let activeFirebaseUrl = CANDIDATE_URLS[0];
+let isSyncingFromCloud = false;
+let lastSyncedTimestamp = 0;
+let isHooked = false;
+
+async function resolveFirebaseUrl(): Promise<string> {
+  for (const url of CANDIDATE_URLS) {
+    try {
+      const res = await fetch(`${url}/lop10a7_data.json`, { method: 'GET' });
+      if (res.ok) {
+        activeFirebaseUrl = url;
+        return url;
+      }
+    } catch {
+      // Thử link tiếp theo
+    }
+  }
+  return activeFirebaseUrl;
+}
+
+async function syncToCloud() {
+  if (isSyncingFromCloud) return;
+  try {
+    const allDataJson = storageService.exportAllData();
+    const accounts = localStorage.getItem('10a7_role_accounts_v1');
+    const now = Date.now();
+    lastSyncedTimestamp = now;
+
+    const payload = {
+      appData: JSON.parse(allDataJson),
+      accounts: accounts ? JSON.parse(accounts) : null,
+      updatedAt: now,
+    };
+
+    await fetch(`${activeFirebaseUrl}/lop10a7_data.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.error('Lỗi lưu đám mây:', err);
+  }
+}
+
+async function pullFromCloud(onDataChanged: () => void) {
+  try {
+    const res = await fetch(`${activeFirebaseUrl}/lop10a7_data.json`);
+    if (!res.ok) return;
+    const cloudData = await res.json();
+
+    if (!cloudData || !cloudData.appData) {
+      await syncToCloud();
+      return;
+    }
+
+    if (cloudData.updatedAt && cloudData.updatedAt > lastSyncedTimestamp) {
+      lastSyncedTimestamp = cloudData.updatedAt;
+      isSyncingFromCloud = true;
+      storageService.importAllData(JSON.stringify(cloudData.appData));
+      if (cloudData.accounts) {
+        localStorage.setItem('10a7_role_accounts_v1', JSON.stringify(cloudData.accounts));
+      }
+      onDataChanged();
+      setTimeout(() => {
+        isSyncingFromCloud = false;
+      }, 300);
+    }
+  } catch (err) {
+    console.error('Lỗi tải đám mây:', err);
+  }
+}
+
+function setupStorageHooks() {
+  if (isHooked) return;
+  isHooked = true;
+  const methodsToHook = [
+    'saveSettings',
+    'saveStudents',
+    'addStudent',
+    'updateStudent',
+    'deleteStudent',
+    'saveRules',
+    'saveIncidents',
+    'addIncident',
+    'deleteIncident',
+    'addMessageLog',
+    'saveCompetitionRecords',
+    'addCompetitionRecord',
+    'updateCompetitionRecord',
+    'deleteCompetitionRecord',
+    'saveFundTransactions',
+    'addFundTransaction',
+    'updateFundTransaction',
+    'deleteFundTransaction',
+    'clearAllFundTransactions',
+    'resetToDefault',
+    'importAllData',
+  ];
+
+  methodsToHook.forEach((methodName) => {
+    const originalMethod = (storageService as any)[methodName];
+    if (typeof originalMethod === 'function') {
+      (storageService as any)[methodName] = function (...args: any[]) {
+        const result = originalMethod.apply(this, args);
+        if (!isSyncingFromCloud) {
+          setTimeout(() => syncToCloud(), 100);
+        }
+        return result;
+      };
+    }
+  });
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
@@ -100,7 +221,6 @@ export default function App() {
     setIsStudentEditModalOpen(true);
   };
 
-  // Re-calculate statistics reactively
   const filterValue = filterType === 'week' ? settings.currentWeek : settings.currentMonth;
 
   const summaries = useMemo(() => {
@@ -117,7 +237,6 @@ export default function App() {
     return storageService.calculateGroupSummaries(summaries);
   }, [summaries]);
 
-  // Export handlers
   const handleExportRoster = () => {
     excelService.exportStudentRosterToExcel(students, summaries, settings);
     showNotification('Đã xuất thành công Danh Sách Học Sinh Lớp 10A7 sang file Excel!', 'success');
@@ -140,7 +259,6 @@ export default function App() {
     showNotification('Đã xuất thành công Báo Cáo Nề Nếp & Vi Phạm sang file Excel!', 'success');
   };
 
-  // Role switching & authentication handlers
   const handleSelectRole = (role: AppUserRole) => {
     const acc = authService.quickSwitchRole(role);
     setCurrentAccount(acc);
@@ -160,7 +278,6 @@ export default function App() {
     showNotification('🔒 Đã đăng xuất thành công! Tất cả tài khoản đã được out hoàn toàn. Hệ thống đã khóa các quyền bảo mật.', 'info');
   };
 
-  // Handlers
   const handleUpdateSettings = (newSettings: TeacherSettings) => {
     const isClassOrSchoolChanged =
       newSettings.schoolName !== settings.schoolName ||
@@ -177,7 +294,7 @@ export default function App() {
   };
 
   const handleQuickAdd = (student: Student, rule: Rule) => {
-    const newRecord = storageService.addIncident({
+    storageService.addIncident({
       studentId: student.id,
       studentName: student.name,
       group: student.group,
@@ -264,7 +381,6 @@ export default function App() {
     storageService.saveRules(updatedRules);
   };
 
-  // Competition handlers (Lớp trưởng & GVCN nhập điểm & hạng thi đua toàn trường)
   const handleAddCompetitionRecord = (
     record: Omit<SchoolCompetitionRecord, 'id' | 'updatedAt'>
   ) => {
@@ -282,7 +398,6 @@ export default function App() {
     setCompetitions(storageService.getCompetitionRecords());
   };
 
-  // Fund handlers (Thủ quỹ & GVCN nhập thu chi & tồn quỹ)
   const handleAddFundTransaction = (
     tx: Omit<FundTransaction, 'id' | 'createdAt'>
   ) => {
@@ -335,19 +450,25 @@ export default function App() {
     setFundTransactions(storageService.getFundTransactions());
   };
 
-  // Tự động đồng bộ dữ liệu đám mây khi mở web
+  // Kích hoạt đồng bộ đám mây tự động khi mở trang web
   useEffect(() => {
-    initCloudSync(() => {
-      handleReloadAllData();
+    setupStorageHooks();
+    resolveFirebaseUrl().then(() => {
+      pullFromCloud(handleReloadAllData);
     });
+    const timer = setInterval(() => {
+      if (!isSyncingFromCloud) {
+        pullFromCloud(handleReloadAllData);
+      }
+    }, 3000);
+    return () => clearInterval(timer);
   }, []);
 
   const handleLogSent = (log: Omit<MessageLog, 'id' | 'sentAt'>) => {
-    const saved = storageService.addMessageLog(log);
+    storageService.addMessageLog(log);
     setMessageLogs(storageService.getMessageLogs());
   };
 
-  // Direct Zalo/SMS sender modal from anywhere
   const handleSelectStudentForZalo = (studentId: string) => {
     setSelectedStudentForZalo(studentId);
     const sum = summaries.find((s) => s.student.id === studentId);
@@ -368,7 +489,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900 selection:bg-blue-600 selection:text-white">
-      {/* Top Header */}
       <Header
         settings={settings}
         onUpdateSettings={handleUpdateSettings}
@@ -388,7 +508,6 @@ export default function App() {
         setFilterType={setFilterType}
       />
 
-      {/* Sticky Tab Navigation */}
       <Navigation
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -396,7 +515,6 @@ export default function App() {
         studentCount={students.length}
       />
 
-      {/* Main Tab Content */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {activeTab === 'dashboard' && (
           <DashboardView
@@ -527,7 +645,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
       <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
         <p>
           Phần Mềm Quản Lý Nề Nếp Lớp Chủ Nhiệm <strong>{settings.className}</strong> • GVCN: <strong>Thầy {settings.teacherName}</strong> • {settings.schoolName}
@@ -537,7 +654,6 @@ export default function App() {
         </p>
       </footer>
 
-      {/* Modal: Detailed Quick Record */}
       <QuickRecordModal
         isOpen={isQuickRecordModalOpen}
         onClose={() => {
@@ -552,7 +668,6 @@ export default function App() {
         preSelectedStudentId={preSelectedStudentId}
       />
 
-      {/* Modal: Import Students from Excel */}
       <ExcelImportModal
         isOpen={isExcelModalOpen}
         onClose={() => setIsExcelModalOpen(false)}
@@ -561,7 +676,6 @@ export default function App() {
         settings={settings}
       />
 
-      {/* Modal: Export All Data to Excel */}
       <ExcelExportModal
         isOpen={isExcelExportModalOpen}
         onClose={() => setIsExcelExportModalOpen(false)}
@@ -574,7 +688,6 @@ export default function App() {
         filterType={filterType}
       />
 
-      {/* Modal: Printable A4 Report */}
       <PrintableReport
         isOpen={isPrintOpen}
         onClose={() => setIsPrintOpen(false)}
@@ -584,7 +697,6 @@ export default function App() {
         filterType={filterType}
       />
 
-      {/* Modal: Login with Username & Password */}
       <LoginModal
         isOpen={isLoginModalOpen}
         onClose={() => setIsLoginModalOpen(false)}
@@ -592,18 +704,17 @@ export default function App() {
         onLoginSuccess={handleLoginSuccess}
       />
 
-      {/* Modal: Account & Password Credentials Handout - Only GVCN can view */}
       <AccountManagementModal
         isOpen={isAccountsModalOpen}
         onClose={() => setIsAccountsModalOpen(false)}
         activeRole={activeRole}
         onAccountsUpdated={() => {
           setCurrentAccount(authService.getCurrentSession());
+          syncToCloud();
         }}
         onOpenRoleAssignmentModal={() => setIsRoleAssignModalOpen(true)}
       />
 
-      {/* Modal: Student Role & Officer Assignment */}
       <StudentRoleAssignmentModal
         isOpen={isRoleAssignModalOpen}
         onClose={() => setIsRoleAssignModalOpen(false)}
@@ -611,10 +722,10 @@ export default function App() {
         onSaveRoleAssignments={handleSaveRoleAssignments}
         onAccountsUpdated={() => {
           setCurrentAccount(authService.getCurrentSession());
+          syncToCloud();
         }}
       />
 
-      {/* Modal: Edit Student Information */}
       <StudentEditModal
         isOpen={isStudentEditModalOpen}
         onClose={() => {
@@ -626,7 +737,6 @@ export default function App() {
         onSaveStudent={handleUpdateStudent}
       />
 
-      {/* Modal: Direct Zalo & SMS Sender */}
       <SendNotificationModal
         isOpen={isNotificationModalOpen}
         onClose={() => {
@@ -644,7 +754,6 @@ export default function App() {
         }}
       />
 
-      {/* Floating Auth Notification Toast */}
       {authNotification && (
         <div className="fixed bottom-5 right-5 z-50 max-w-md bg-slate-900/95 text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700/80 backdrop-blur-md flex items-center justify-between gap-3 animate-fadeIn">
           <div className="text-xs font-semibold leading-relaxed">
