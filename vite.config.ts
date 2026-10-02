@@ -6,7 +6,7 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
-        base: process.env.GITHUB_ACTIONS ? '/lop/' : './',
+        base: process.env.GITHUB_ACTIONS ? '/abc/' : './',
         server: {
             port: 3000,
             host: '0.0.0.0',
