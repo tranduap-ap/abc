@@ -272,22 +272,6 @@ export default function App() {
     setCompetitions(storageService.getCompetitionRecords());
   };
 
-  const handleReloadAllData = () => {
-  setSettings(storageService.getSettings());
-  setStudents(storageService.getStudents());
-  setRules(storageService.getRules());
-  setIncidents(storageService.getIncidents());
-  setMessageLogs(storageService.getMessageLogs());
-  setCompetitions(storageService.getCompetitionRecords());
-  setFundTransactions(storageService.getFundTransactions());
-};
-
-// THÊM ĐOẠN NÀY ĐỂ TỰ ĐỘNG ĐỒNG BỘ KHI MỞ WEB:
-useEffect(() => {
-  initCloudSync(() => {
-    handleReloadAllData();
-  });
-}, []);
   const handleUpdateCompetitionRecord = (record: SchoolCompetitionRecord) => {
     storageService.updateCompetitionRecord(record);
     setCompetitions(storageService.getCompetitionRecords());
@@ -350,6 +334,13 @@ useEffect(() => {
     setCompetitions(storageService.getCompetitionRecords());
     setFundTransactions(storageService.getFundTransactions());
   };
+
+  // Tự động đồng bộ dữ liệu đám mây khi mở web
+  useEffect(() => {
+    initCloudSync(() => {
+      handleReloadAllData();
+    });
+  }, []);
 
   const handleLogSent = (log: Omit<MessageLog, 'id' | 'sentAt'>) => {
     const saved = storageService.addMessageLog(log);
