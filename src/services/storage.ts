@@ -543,3 +543,83 @@ export const storageService = {
     localStorage.removeItem(STORAGE_KEYS.FUND);
   },
 };
+// ============================================================================
+// ĐỒNG BỘ DỮ LIỆU ĐÁM MÂY TỰ ĐỘNG QUA FIREBASE REALTIME DATABASE
+// ============================================================================
+
+// DÁN LINK FIREBASE CỦA BẠN VÀO ĐÂY (Không có dấu / ở cuối)
+const FIREBASE_DB_URL = 'https://THAY_LINK_CUA_BAN_VAO_DAY.firebasedatabase.app';
+
+let isSyncingFromCloud = false;
+
+// 1. Hàm đẩy toàn bộ dữ liệu hiện tại lên Đám mây
+export async function syncToCloud() {
+  if (isSyncingFromCloud || !FIREBASE_DB_URL.startsWith('https://') || FIREBASE_DB_URL.includes('THAY_LINK')) {
+    return;
+  }
+  try {
+    const allDataJson = storageService.exportAllData();
+    // Lấy thêm danh sách mật khẩu phân quyền nếu có
+    const accounts = localStorage.getItem('10a7_role_accounts_v1');
+    const payload = {
+      appData: JSON.parse(allDataJson),
+      accounts: accounts ? JSON.parse(accounts) : null,
+      updatedAt: Date.now(),
+    };
+
+    await fetch(`${FIREBASE_DB_URL}/lop10a7_data.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.error('Lỗi khi lưu dữ liệu lên đám mây:', err);
+  }
+}
+
+// 2. Tự động lắng nghe dữ liệu từ Đám mây (Real-time) khi mở web
+export function initCloudSync(onDataChanged: () => void) {
+  if (!FIREBASE_DB_URL.startsWith('https://') || FIREBASE_DB_URL.includes('THAY_LINK')) {
+    return;
+  }
+
+  // Sử dụng Server-Sent Events của Firebase để nhận cập nhật tức thì
+  const eventSource = new EventSource(`${FIREBASE_DB_URL}/lop10a7_data.json`);
+
+  eventSource.addEventListener('put', (event: MessageEvent) => {
+    try {
+      const parsed = JSON.parse(event.data);
+      const cloudData = parsed.data;
+
+      // Nếu đám mây chưa có dữ liệu (lần đầu tiên chạy), đẩy dữ liệu máy hiện tại lên
+      if (!cloudData) {
+        syncToCloud();
+        return;
+      }
+
+      if (cloudData.appData) {
+        isSyncingFromCloud = true;
+        storageService.importAllData(JSON.stringify(cloudData.appData));
+        if (cloudData.accounts) {
+          localStorage.setItem('10a7_role_accounts_v1', JSON.stringify(cloudData.accounts));
+        }
+        onDataChanged(); // Cập nhật lại giao diện ngay lập tức
+        setTimeout(() => {
+          isSyncingFromCloud = false;
+        }, 500);
+      }
+    } catch (err) {
+      console.error('Lỗi đồng bộ từ đám mây:', err);
+    }
+  });
+}
+
+// 3. Tự động bắt sự kiện mỗi khi localStorage thay đổi để đẩy lên mây
+const originalSetItem = localStorage.setItem.bind(localStorage);
+localStorage.setItem = function (key: string, value: string) {
+  originalSetItem(key, value);
+  // Không đồng bộ phiên đăng nhập cá nhân (để mỗi người đăng nhập 1 tài khoản riêng trên máy của mình)
+  if (!isSyncingFromCloud && !key.includes('session')) {
+    syncToCloud();
+  }
+};
